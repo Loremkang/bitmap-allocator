@@ -24,6 +24,12 @@ pub trait BitAlloc: Default {
     /// Whether there are free bits remaining
     fn any(&self) -> bool;
 
+    /// Foundation of insert and remove. "bit" is only 0xffff or 0. Lazy tagging: apply to oneself when pushing down.
+    fn set(&mut self, range: Range<usize>, bit: u16);
+
+    /// Add tag. Directly modify data for leaves.
+    fn tag(&mut self, range: Range<usize>, bit: u16);
+
     /// Whether a specific bit is free
     fn test(&self, key: usize) -> bool;
 }
@@ -44,6 +50,8 @@ pub type BitAlloc256M = BitAllocCascade16<BitAlloc16M>;
 /// Implement the bit allocator by segment tree algorithm.
 #[derive(Default)]
 pub struct BitAllocCascade16<T: BitAlloc> {
+    bit_tag: u16, // save the (pushdown) tag on each segment
+    tagging: bool, // mark if the tag is active
     bitset: u16, // for each bit, 1 indicates available, 0 indicates inavailable
     sub: [T; 16],
 }
@@ -52,6 +60,7 @@ impl<T: BitAlloc> BitAlloc for BitAllocCascade16<T> {
     const CAP: usize = T::CAP * 16;
 
     fn alloc(&mut self) -> Option<usize> {
+        self.applyTags();
         if self.any() {
             let i = log2(self.bitset);
             let res = self.sub[i].alloc().unwrap() + i * T::CAP;
@@ -62,42 +71,64 @@ impl<T: BitAlloc> BitAlloc for BitAllocCascade16<T> {
         }
     }
     fn dealloc(&mut self, key: usize) {
+        self.applyTags();
         let i = key / T::CAP;
         self.sub[i].dealloc(key % T::CAP);
         self.bitset.set_bit(i, true);
     }
     fn insert(&mut self, range: Range<usize>) {
-        self.for_range(range, |sub: &mut T, range| sub.insert(range));
+        self.set(range, 0);
     }
     fn remove(&mut self, range: Range<usize>) {
-        self.for_range(range, |sub: &mut T, range| sub.remove(range));
+        self.set(range, 0xffff);
+    }
+    fn set(&mut self, range: Range<usize>, bit: u16) {
+        let Range { start, end } = range;
+        assert!(start <= end);
+        assert!(end <= Self::CAP);
+        self.applyTags();
+        if (end - start == Self::CAP) { // fully cover this segment
+            self.tag(0..16, bit);
+        } else {
+            for i in start / T::CAP..=(end - 1) / T::CAP {
+                let begin = if start / T::CAP == i {
+                    start % T::CAP
+                } else {
+                    0
+                };
+                let end = if end / T::CAP == i {
+                    end % T::CAP
+                } else {
+                    T::CAP
+                };
+                self.sub[i].set(begin..end, bit);
+                self.bitset.set_bit(i, self.sub[i].any());
+            }
+        }
+    }
+    fn tag(&mut self, range: Range<usize>, bit: u16) {
+        self.tagging = true;
+        self.bit_tag = bit;
     }
     fn any(&self) -> bool {
+        self.applyTags();
         self.bitset != 0
     }
     fn test(&self, key: usize) -> bool {
+        self.applyTags();
         self.sub[key / T::CAP].test(key % T::CAP)
     }
 }
 
 impl<T: BitAlloc> BitAllocCascade16<T> {
-    fn for_range(&mut self, range: Range<usize>, f: impl Fn(&mut T, Range<usize>)) {
-        let Range { start, end } = range;
-        assert!(start <= end);
-        assert!(end <= Self::CAP);
-        for i in start / T::CAP..=(end - 1) / T::CAP {
-            let begin = if start / T::CAP == i {
-                start % T::CAP
-            } else {
-                0
-            };
-            let end = if end / T::CAP == i {
-                end % T::CAP
-            } else {
-                T::CAP
-            };
-            f(&mut self.sub[i], begin..end);
-            self.bitset.set_bit(i, self.sub[i].any());
+    /// Apply tags on oneself. May propogate to leaves, so we have "tag" function.
+    fn applyTags(&mut self) {
+        if (self.tagging == true) {
+            self.bitset.set_bits(0..16, bit_tag);
+            for i in 0..16 {
+                self.sub[i].tag(0..16, bit_tag);
+            }
+            self.tagging = false;
         }
     }
 }
@@ -125,16 +156,28 @@ impl BitAlloc for BitAlloc16 {
         self.0.set_bit(key, true);
     }
     fn insert(&mut self, range: Range<usize>) {
-        self.0.set_bits(range.clone(), 0xffff.get_bits(range));
+        self.set(range, 0xffff);
     }
     fn remove(&mut self, range: Range<usize>) {
-        self.0.set_bits(range, 0);
+        self.set(range, 0);
+    }
+    fn set(&mut self, range: Range<usize>, bit: u16) {
+        self.0.set_bits(range, bit.get_bits(range));
+    }
+    fn tag(&mut self, range: Range<usize>, bit: u16) {
+        self.set(range, bit);
     }
     fn any(&self) -> bool {
         self.0 != 0
     }
     fn test(&self, key: usize) -> bool {
         self.0.get_bit(key)
+    }
+    fn applyTags(&mut self) {
+        if (self.tagging == true) {
+            self.bitset.set_bits(0..16, bit_tag);
+            self.tagging = false;
+        }
     }
 }
 

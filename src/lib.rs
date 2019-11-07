@@ -88,7 +88,7 @@ impl<T: BitAlloc> BitAlloc for BitAllocCascade16<T> {
         assert!(end <= Self::CAP);
         self.apply_tags();
         if end - start == Self::CAP { // fully cover this segment
-            self.tag(bit);
+            self.tag(bit != 0);
         } else {
             for i in start / T::CAP..=(end - 1) / T::CAP {
                 let begin = if start / T::CAP == i {

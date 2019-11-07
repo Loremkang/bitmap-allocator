@@ -28,7 +28,7 @@ pub trait BitAlloc: Default {
     fn set(&mut self, range: Range<usize>, bit: u16);
 
     /// Add tag for delayed update. Directly modify data for leaves.
-    fn tag(&mut self, bit: u16);
+    fn tag(&mut self, bit: bool);
 
     /// Whether a specific bit is free
     fn test(&mut self, key: usize) -> bool;
@@ -50,7 +50,7 @@ pub type BitAlloc256M = BitAllocCascade16<BitAlloc16M>;
 /// Implement the bit allocator by segment tree algorithm.
 #[derive(Default)]
 pub struct BitAllocCascade16<T: BitAlloc> {
-    bit_tag: u16, // save the (pushdown) tag on each segment
+    bit_tag: bool, // save the (pushdown) tag on each segment
     tagging: bool, // mark if the tag is active
     bitset: u16, // for each bit, 1 indicates available, 0 indicates inavailable
     sub: [T; 16],
@@ -106,7 +106,7 @@ impl<T: BitAlloc> BitAlloc for BitAllocCascade16<T> {
             }
         }
     }
-    fn tag(&mut self, bit: u16) {
+    fn tag(&mut self, bit: bool) {
         self.tagging = true;
         self.bit_tag = bit;
     }
@@ -124,7 +124,11 @@ impl<T: BitAlloc> BitAllocCascade16<T> {
     /// Apply tags on oneself. May propogate to leaves, so we have "tag" function.
     fn apply_tags(&mut self) {
         if self.tagging == true {
-            self.bitset.set_bits(0..16, self.bit_tag);
+            match self.bit_tag {
+                true => self.bitset.set_bits(0..16, 0xffff),
+                false => self.bitset.set_bits(0..16, 0)
+            };
+            //self.bitset.set_bits(0..16, self.bit_tag ? (0xffff) : (0));
             for i in 0..16 {
                 self.sub[i].tag(self.bit_tag);
             }
@@ -164,8 +168,11 @@ impl BitAlloc for BitAlloc16 {
     fn set(&mut self, range: Range<usize>, bit: u16) {
         self.0.set_bits(range.clone(), bit.get_bits(range));
     }
-    fn tag(&mut self, bit: u16) {
-        self.set(0..16, bit);
+    fn tag(&mut self, bit: bool) {
+        match bit {
+            true => self.set(0..16, 0xffff),
+            false => self.set(0..16, 0)
+        };
     }
     fn any(&mut self) -> bool {
         self.0 != 0
